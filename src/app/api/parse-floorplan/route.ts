@@ -227,9 +227,12 @@ export async function POST(request: Request) {
 
         const body = await request.json();
         const dataUri = body?.image;
-        if (typeof dataUri !== "string" || !dataUri.startsWith("data:image/")) {
+        if (
+            typeof dataUri !== "string" ||
+            !/^data:(image\/(?:png|jpeg|webp|gif)|application\/pdf);base64,/.test(dataUri)
+        ) {
             return NextResponse.json(
-                { error: "Missing or invalid image (expected base64 data URI)" },
+                { error: "Choose a PNG, JPG, WEBP, GIF, or PDF floor plan." },
                 { status: 400 },
             );
         }
@@ -238,8 +241,8 @@ export async function POST(request: Request) {
         const rows = Math.min(Math.max(Number(body?.rows) || DEFAULT_ROWS, 3), 36);
 
         const match = dataUri.match(/^data:([^;]+);base64,(.+)$/);
-        const mimeType = match ? match[1] : "image/png";
-        const base64Data = match ? match[2] : dataUri.replace(/^data:[^;]+;base64,/, "");
+        const mimeType = match![1];
+        const base64Data = match![2];
 
         const floorPlan = await callGeminiWithRetry(apiKey, mimeType, base64Data, cols, rows);
 

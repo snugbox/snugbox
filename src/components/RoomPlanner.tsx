@@ -1,21 +1,17 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Image from "next/image";
+import React, { useCallback, useRef, useState } from "react";
 import type { FloorPlanData, Room } from "@/types/floorplan";
 import type { FurnitureItem, FurnitureType, Rotation, ViewRotation } from "@/types/furniture";
 import {
     DEFAULT_HEIGHT,
     DEFAULT_WIDTH,
     FURNITURE_CATALOG,
-    GRANULARITY_TARGET,
-    MAX_COLS,
-    MAX_ROWS,
     ROTATION_TO_ORIENTATION,
     SPRITE_BASE_MAP,
 } from "@/data/furniture-catalog";
 import { SAMPLE_PRESETS, type SamplePreset } from "@/data/sample-presets";
-import { createFloor, resampleGrid, scaleRooms } from "@/utils/grid";
+import { createFloor } from "@/utils/grid";
 import { autoFurnish, buildItem, canPlaceItem } from "@/utils/furniture";
 import { useSpriteImages } from "@/hooks/useSpriteImages";
 import { SpritePreview } from "@/components/SpritePreview";
@@ -40,14 +36,14 @@ export default function RoomPlanner() {
     const [baseGrid, setBaseGrid] = useState<boolean[][] | null>(() =>
         createFloor(DEFAULT_WIDTH, DEFAULT_HEIGHT),
     );
-    const [baseRooms, setBaseRooms] = useState<Room[]>([]);
 
-    const [uploadPreview, setUploadPreview] = useState<string | null>(null);
+    const [hasPlan, setHasPlan] = useState(false);
     const [uploading, setUploading] = useState(false);
     const [uploadError, setUploadError] = useState<string | null>(null);
     const [dragOver, setDragOver] = useState(false);
     const [furnishing, setFurnishing] = useState(false);
     const fileInputRef = useRef<HTMLInputElement | null>(null);
+    const lastFileRef = useRef<File | null>(null);
 
     const spriteImages = useSpriteImages(SPRITE_BASE_MAP);
 
@@ -88,10 +84,10 @@ export default function RoomPlanner() {
 
     const onFloorPlanParsed = useCallback(
         (data: FloorPlanData, furnish = true) => {
+            setHasPlan(true);
             setGrid(data.grid);
             setRooms(data.rooms);
             setBaseGrid(data.grid);
-            setBaseRooms(data.rooms);
             setSelectedItemId(null);
 
             if (furnish && data.rooms.length > 0) {
@@ -117,51 +113,57 @@ export default function RoomPlanner() {
             reader.readAsDataURL(file);
         });
 
-    const handleFiles = useCallback(async (files: FileList | null) => {
-        if (!files || files.length === 0) return;
-        const file = files[0];
-        if (!file.type.startsWith("image/")) {
-            setUploadError("Please upload an image file.");
-            return;
-        }
-        try {
-            const dataUrl = await readFileAsDataUrl(file);
-            setUploadPreview(dataUrl);
-            setUploadError(null);
-        } catch {
-            setUploadError("Failed to read image file.");
-        }
-    }, []);
-
-    const handleAnalyze = useCallback(async () => {
-        if (!uploadPreview) return;
-        setUploading(true);
-        setUploadError(null);
-        try {
-            const res = await fetch("/api/parse-floorplan", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ image: uploadPreview }),
-            });
-            const data = await res.json();
-            if (!res.ok) {
-                setUploadError(data.error || "Analysis failed.");
+    const handleAnalyze = useCallback(
+        async (file: File) => {
+            lastFileRef.current = null;
+            const isPdf =
+                file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+            if (!file.type.startsWith("image/") && !isPdf) {
+                setUploadError("Choose a floor plan image or PDF.");
                 return;
             }
-            onFloorPlanParsed(data as FloorPlanData);
-        } catch {
-            setUploadError("Network error. Please try again.");
-        } finally {
-            setUploading(false);
-        }
-    }, [uploadPreview, onFloorPlanParsed]);
+            if (file.size > 15 * 1024 * 1024) {
+                setUploadError("Choose a file smaller than 15 MB.");
+                return;
+            }
+            lastFileRef.current = file;
+            setUploading(true);
+            setUploadError(null);
+            try {
+                let dataUrl = await readFileAsDataUrl(file);
+                if (isPdf && !dataUrl.startsWith("data:application/pdf;")) {
+                    dataUrl = dataUrl.replace(/^data:[^;]*;/, "data:application/pdf;");
+                }
+                const res = await fetch("/api/parse-floorplan", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ image: dataUrl }),
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    setUploadError(data.error || "Analysis failed.");
+                    return;
+                }
+                onFloorPlanParsed(data as FloorPlanData);
+            } catch {
+                setUploadError("Network error. Please try again.");
+            } finally {
+                setUploading(false);
+            }
+        },
+        [onFloorPlanParsed],
+    );
 
     const handleTryAgain = useCallback(() => {
-        setUploadError(null);
-        if (uploadPreview) {
-            handleAnalyze();
-        }
-    }, [uploadPreview, handleAnalyze]);
+        if (lastFileRef.current) handleAnalyze(lastFileRef.current);
+    }, [handleAnalyze]);
+
+    const handleFiles = useCallback(
+        (files: FileList | null) => {
+            if (files?.[0]) void handleAnalyze(files[0]);
+        },
+        [handleAnalyze],
+    );
 
     const handleAIFurnish = useCallback(() => {
         if (rooms.length === 0) {
@@ -185,7 +187,6 @@ export default function RoomPlanner() {
     const handleLoadPreset = useCallback(
         (preset: SamplePreset) => {
             onFloorPlanParsed(preset.data, true);
-            setUploadPreview(null);
             setUploadError(null);
         },
         [onFloorPlanParsed],
@@ -205,27 +206,13 @@ export default function RoomPlanner() {
         [activeFurniture, grid, items, rotation],
     );
 
-    const resetScene = useCallback(() => {
-        const nextGrid = createFloor(DEFAULT_WIDTH, DEFAULT_HEIGHT);
-        setGrid(nextGrid);
-        setBaseGrid(nextGrid);
-        setBaseRooms([]);
-        setItems([
-            buildItem("sofa", 2, 2, 0),
-            buildItem("table", 5, 3, 0),
-            buildItem("bed", 7, 2, 0),
-            buildItem("plant", 1, 5, 0),
-        ]);
-        setStatus("Reset to a clean, playable scene.");
-    }, []);
-
     const clearFurniture = useCallback(() => {
         setItems([]);
         setSelectedItemId(null);
         setStatus("Cleared all furniture.");
     }, []);
 
-    const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    const handleDragOver = useCallback((e: React.DragEvent<HTMLElement>) => {
         e.preventDefault();
         setDragOver(true);
     }, []);
@@ -235,7 +222,7 @@ export default function RoomPlanner() {
     }, []);
 
     const handleDrop = useCallback(
-        (e: React.DragEvent<HTMLDivElement>) => {
+        (e: React.DragEvent<HTMLElement>) => {
             e.preventDefault();
             setDragOver(false);
             handleFiles(e.dataTransfer.files);
@@ -247,33 +234,13 @@ export default function RoomPlanner() {
         fileInputRef.current?.click();
     }, []);
 
-    const handleUploadZoneKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
-        if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            fileInputRef.current?.click();
-        }
-    }, []);
-
     const handleFileInputChange = useCallback(
         (e: React.ChangeEvent<HTMLInputElement>) => {
             handleFiles(e.target.files);
+            e.target.value = "";
         },
         [handleFiles],
     );
-
-    const handleAnalyzeClick = useCallback(
-        (e: React.MouseEvent) => {
-            e.stopPropagation();
-            handleAnalyze();
-        },
-        [handleAnalyze],
-    );
-
-    const handleClearUpload = useCallback((e: React.MouseEvent) => {
-        e.stopPropagation();
-        setUploadPreview(null);
-        setUploadError(null);
-    }, []);
 
     const handleRotate = useCallback(() => {
         setRotation((prev) => ((prev + 90) % 360) as Rotation);
@@ -303,219 +270,205 @@ export default function RoomPlanner() {
         if (type) setActiveFurniture(type);
     }, []);
 
-    const maxGranularity = useMemo(() => {
-        if (!baseGrid || baseGrid.length === 0 || baseGrid[0]?.length === 0) return 1;
-        const baseCols = baseGrid[0].length;
-        const baseRows = baseGrid.length;
-        return Math.max(
-            1,
-            Math.min(Math.floor(MAX_COLS / baseCols), Math.floor(MAX_ROWS / baseRows)),
-        );
-    }, [baseGrid]);
-
-    const granularity = useMemo(
-        () => Math.min(GRANULARITY_TARGET, maxGranularity),
-        [maxGranularity],
-    );
-    const prevGranRef = useRef(granularity);
-    useEffect(() => {
-        if (!baseGrid || baseGrid.length === 0 || baseGrid[0]?.length === 0) return;
-        const baseCols = baseGrid[0].length;
-        const baseRows = baseGrid.length;
-        const factor = Math.max(1, Math.min(granularity, maxGranularity));
-        const targetCols = baseCols * factor;
-        const targetRows = baseRows * factor;
-
-        // Skip if nothing actually changed (avoids clearing items on mount)
-        if (
-            factor === prevGranRef.current &&
-            grid.length === targetRows &&
-            (grid[0]?.length ?? 0) === targetCols
-        ) {
-            return;
-        }
-        prevGranRef.current = factor;
-
-        setGrid(resampleGrid(baseGrid, targetCols, targetRows));
-        setRooms(scaleRooms(baseRooms, baseCols, baseRows, targetCols, targetRows));
-        setItems([]);
-        setSelectedItemId(null);
-    }, [baseGrid, baseRooms, granularity, maxGranularity, grid]);
-
     return (
         <>
-            <section className="main">
-                <div className="panel">
-                    <h2>Floor Plan</h2>
-
-                    <div
-                        tabIndex={0}
-                        className={`upload-zone ${dragOver ? "dragover" : ""}`}
-                        onDragOver={handleDragOver}
-                        onDragLeave={handleDragLeave}
-                        onDrop={handleDrop}
-                        onClick={handleUploadZoneClick}
-                        onKeyDown={handleUploadZoneKeyDown}
-                    >
-                        <input
-                            ref={fileInputRef}
-                            type="file"
-                            accept="image/*"
-                            className="upload-input"
-                            onChange={handleFileInputChange}
-                        />
-                        {uploadPreview ? (
-                            <div className="upload-preview">
-                                <Image
-                                    src={uploadPreview}
-                                    alt="Floor plan preview"
-                                    width={400}
-                                    height={300}
-                                    unoptimized
-                                />
-                                <div className="upload-actions">
-                                    <button
-                                        type="button"
-                                        className="action-button primary"
-                                        onClick={handleAnalyzeClick}
-                                        disabled={uploading}
-                                    >
-                                        {uploading ? (
-                                            <>
-                                                <span className="spinner" /> Analyzing…
-                                            </>
-                                        ) : (
-                                            "Analyze Floor Plan"
-                                        )}
-                                    </button>
-                                    <button
-                                        type="button"
-                                        className="tool-button"
-                                        onClick={handleClearUpload}
-                                    >
-                                        Clear
-                                    </button>
-                                </div>
-                            </div>
-                        ) : (
-                            <p>Drop a floor plan image here or click to browse</p>
-                        )}
+            <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*,.pdf,application/pdf"
+                className="upload-input"
+                onChange={handleFileInputChange}
+            />
+            {!hasPlan ? (
+                <section className="welcome-screen">
+                    <div className="welcome-brand">
+                        <span className="brand-mark">▦</span> snugbox
                     </div>
-                    {uploadError && (
-                        <div className="upload-error">
-                            <span>{uploadError}</span>
-                            <button type="button" className="tool-button" onClick={handleTryAgain}>
-                                Try Again
-                            </button>
-                        </div>
-                    )}
-
-                    <div className="preset-row">
-                        <span className="preset-label">Quick start:</span>
-                        {SAMPLE_PRESETS.map((preset) => (
-                            <button
-                                key={preset.name}
-                                type="button"
-                                className="tool-button"
-                                data-preset={preset.name}
-                                onClick={handlePresetClick}
-                            >
-                                {preset.name}
-                            </button>
-                        ))}
-                    </div>
-
-                    <div className="furniture-list">
-                        {Object.entries(FURNITURE_CATALOG).map(([key, data]) => (
-                            <button
-                                key={key}
-                                type="button"
-                                className={`furniture-card ${activeFurniture === key ? "active" : ""}`}
-                                data-type={key}
-                                onClick={handleFurnitureCardClick}
-                            >
-                                <SpritePreview
-                                    type={key as FurnitureType}
-                                    images={spriteImages}
-                                    rotation={activeFurniture === key ? rotation : 0}
-                                />
-                                <strong>{data.label}</strong>
-                                <div className="note">
-                                    {data.w}x{data.h} tiles
-                                </div>
-                            </button>
-                        ))}
-                    </div>
-
-                    <div className="tool-row">
-                        <button className="tool-button" onClick={handleRotate} type="button">
-                            Rotate {rotation}° ({ROTATION_TO_ORIENTATION[rotation]})
-                        </button>
-                    </div>
-
-                    <div className="actions">
+                    <div className="welcome-content">
+                        <div className="welcome-kicker">YOUR SPACE, REIMAGINED</div>
+                        <h1>
+                            Bring your floor plan
+                            <br />
+                            <span>to life.</span>
+                        </h1>
+                        <p className="welcome-description">
+                            Import a floor plan to see your space in 3D and make it your own.
+                        </p>
                         <button
-                            className="action-button primary"
-                            onClick={resetScene}
                             type="button"
+                            disabled={uploading}
+                            className={`welcome-dropzone ${dragOver ? "dragover" : ""}`}
+                            onDragOver={handleDragOver}
+                            onDragLeave={handleDragLeave}
+                            onDrop={handleDrop}
+                            onClick={handleUploadZoneClick}
+                            aria-label="Import floor plan image or PDF"
                         >
-                            Reset Scene
-                        </button>
-                        <button
-                            className="action-button accent"
-                            onClick={handleAIFurnish}
-                            disabled={furnishing || rooms.length === 0}
-                            type="button"
-                        >
-                            {furnishing ? (
-                                <>
-                                    <span className="spinner" /> Designing…
-                                </>
-                            ) : (
-                                "AI Furnish"
+                            <span className="upload-icon" aria-hidden="true">
+                                ↑
+                            </span>
+                            <strong>
+                                {uploading ? "Creating your space…" : "Import floor plan"}
+                            </strong>
+                            <span>Choose an image or PDF, or drop it here</span>
+                            <small>PNG, JPG, WEBP or PDF · up to 15 MB</small>
+                            {uploading && (
+                                <span className="spinner" aria-label="Analyzing floor plan" />
                             )}
                         </button>
-                        <button
-                            className="action-button"
-                            onClick={handleQuickFurnish}
-                            type="button"
-                        >
-                            Quick Furnish
-                        </button>
-                        <button className="action-button" onClick={clearFurniture} type="button">
-                            Clear Furniture
-                        </button>
+                        {uploadError && (
+                            <div className="welcome-error" role="alert">
+                                <span>{uploadError}</span>
+                                {lastFileRef.current && (
+                                    <button
+                                        type="button"
+                                        onClick={handleTryAgain}
+                                        disabled={uploading}
+                                    >
+                                        Try again
+                                    </button>
+                                )}
+                            </div>
+                        )}
                     </div>
-                    <p className="note">
-                        Tip: click in the isometric view to place furniture. Drag items to move
-                        them.
-                    </p>
-                </div>
+                    <div className="welcome-footer">A LITTLE ROOM FOR BIG IDEAS</div>
+                </section>
+            ) : (
+                <section className="main">
+                    <div className="panel">
+                        <div className="planner-heading">
+                            <h2>Assets</h2>
+                            <button
+                                type="button"
+                                className="tool-button"
+                                onClick={handleUploadZoneClick}
+                                disabled={uploading}
+                            >
+                                {uploading ? "Importing…" : "Import another"}
+                            </button>
+                        </div>
+                        {uploadError && (
+                            <div className="upload-error">
+                                <span>{uploadError}</span>
+                                <button
+                                    type="button"
+                                    className="tool-button"
+                                    onClick={handleTryAgain}
+                                    disabled={uploading}
+                                >
+                                    Try Again
+                                </button>
+                            </div>
+                        )}
 
-                <div className="panel panel-iso">
-                    <h2>Isometric Room</h2>
-                    <div className="tool-row">
-                        <button className="tool-button" onClick={handleRotateView} type="button">
-                            Rotate View {viewRotation}°
-                        </button>
+                        <div className="preset-row">
+                            <span className="preset-label">Quick start:</span>
+                            {SAMPLE_PRESETS.map((preset) => (
+                                <button
+                                    key={preset.name}
+                                    type="button"
+                                    className="tool-button"
+                                    data-preset={preset.name}
+                                    onClick={handlePresetClick}
+                                >
+                                    {preset.name}
+                                </button>
+                            ))}
+                        </div>
+
+                        <div className="furniture-list">
+                            {Object.entries(FURNITURE_CATALOG).map(([key, data]) => (
+                                <button
+                                    key={key}
+                                    type="button"
+                                    className={`furniture-card ${activeFurniture === key ? "active" : ""}`}
+                                    data-type={key}
+                                    onClick={handleFurnitureCardClick}
+                                >
+                                    <SpritePreview
+                                        type={key as FurnitureType}
+                                        images={spriteImages}
+                                        rotation={activeFurniture === key ? rotation : 0}
+                                    />
+                                    <strong>{data.label}</strong>
+                                    <div className="note">
+                                        {data.w}x{data.h} tiles
+                                    </div>
+                                </button>
+                            ))}
+                        </div>
+
+                        <div className="tool-row">
+                            <button className="tool-button" onClick={handleRotate} type="button">
+                                Rotate {rotation}° ({ROTATION_TO_ORIENTATION[rotation]})
+                            </button>
+                        </div>
+
+                        <div className="actions">
+                            <button
+                                className="action-button accent"
+                                onClick={handleAIFurnish}
+                                disabled={furnishing || rooms.length === 0}
+                                type="button"
+                            >
+                                {furnishing ? (
+                                    <>
+                                        <span className="spinner" /> Designing…
+                                    </>
+                                ) : (
+                                    "AI Furnish"
+                                )}
+                            </button>
+                            <button
+                                className="action-button"
+                                onClick={handleQuickFurnish}
+                                type="button"
+                            >
+                                Quick Furnish
+                            </button>
+                            <button
+                                className="action-button"
+                                onClick={clearFurniture}
+                                type="button"
+                            >
+                                Clear Furniture
+                            </button>
+                        </div>
+                        <p className="note">
+                            Tip: click in the isometric view to place furniture. Drag items to move
+                            them.
+                        </p>
                     </div>
-                    <IsoRoomCanvas
-                        grid={grid}
-                        baseGrid={baseGrid}
-                        rooms={rooms}
-                        items={items}
-                        spriteImages={spriteImages}
-                        viewRotation={viewRotation}
-                        onMoveItem={handleMoveItem}
-                        onPlaceItem={handlePlaceAt}
-                        selectedItemId={selectedItemId}
-                        onSelectItem={setSelectedItemId}
-                    />
-                    <div className="status">
-                        {status} Shift-drag or right-click to pan, scroll to zoom.
+
+                    <div className="panel panel-iso">
+                        <h2>Isometric Room</h2>
+                        <div className="tool-row">
+                            <button
+                                className="tool-button"
+                                onClick={handleRotateView}
+                                type="button"
+                            >
+                                Rotate View {viewRotation}°
+                            </button>
+                        </div>
+                        <IsoRoomCanvas
+                            grid={grid}
+                            baseGrid={baseGrid}
+                            rooms={rooms}
+                            items={items}
+                            spriteImages={spriteImages}
+                            viewRotation={viewRotation}
+                            onMoveItem={handleMoveItem}
+                            onPlaceItem={handlePlaceAt}
+                            selectedItemId={selectedItemId}
+                            onSelectItem={setSelectedItemId}
+                        />
+                        <div className="status">
+                            {status} Shift-drag or right-click to pan, scroll to zoom.
+                        </div>
                     </div>
-                </div>
-            </section>
+                </section>
+            )}
         </>
     );
 }
