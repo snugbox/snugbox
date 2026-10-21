@@ -45,6 +45,18 @@ pnpm dev
 
 The app runs at [http://localhost:3000](http://localhost:3000).
 
+To open it from another device, run `pnpm dev:network` on the host machine and
+visit `http://<host-ip>:3000` from that device. Use the host's reachable IP
+address, not `0.0.0.0`. On a Mac using Wi-Fi, `ipconfig getifaddr en0` usually
+prints its local network IP. The host firewall must allow incoming connections
+to port 3000. If the host is reachable only through SSH, forward the port instead:
+
+```bash
+ssh -L 3000:localhost:3000 user@host
+```
+
+Then open [http://localhost:3000](http://localhost:3000) on your own machine.
+
 ### Other Commands
 
 ```bash
