@@ -15,7 +15,8 @@ An isometric room planner that turns floor plan images into interactive 3D views
 
 ### Prerequisites
 
-- Node.js 18+
+- Node.js 20.9+
+- pnpm 10.32.1
 - A [Google Gemini API key](https://ai.google.dev/) (used for floor plan parsing and auto-furnish)
 
 ### Environment Setup
@@ -37,8 +38,9 @@ GEMINI_API_KEY=your_key_here
 ### Install and Run
 
 ```bash
-yarn install
-yarn dev
+git submodule update --init --recursive
+pnpm install
+pnpm dev
 ```
 
 The app runs at [http://localhost:3000](http://localhost:3000).
@@ -46,9 +48,9 @@ The app runs at [http://localhost:3000](http://localhost:3000).
 ### Other Commands
 
 ```bash
-yarn build         # production build
-yarn lint          # run oxlint
-yarn lint:fix      # run oxlint with auto-fix
+pnpm build         # production build
+pnpm lint          # run oxlint
+pnpm lint:fix      # run oxlint with auto-fix
 ```
 
 ## Tech Stack

@@ -37,5 +37,5 @@
       "oxlint"
     ]
   },
-  "packageManager": "yarn@4.12.0"
+  "packageManager": "pnpm@10.32.1"
 }
