@@ -11,7 +11,7 @@ Iso Room Planner — a hackathon prototype that renders a 2D floor-plan grid alo
 ```bash
 pnpm install       # install deps (requires initialized git submodule)
 pnpm dev           # start Next.js dev server (port 3000, Turbopack)
-pnpm dev:network   # listen on all interfaces for access from another device
+pnpm dev:network   # bind to Tailscale IPv4 (or another network IPv4)
 pnpm build         # production build
 pnpm lint          # oxlint
 pnpm lint:fix      # oxlint with auto-fix
