@@ -15,7 +15,8 @@ An isometric room planner that turns floor plan images into interactive 3D views
 
 ### Prerequisites
 
-- Node.js 18+
+- Node.js 20.9+
+- pnpm 10.32.1
 - A [Google Gemini API key](https://ai.google.dev/) (used for floor plan parsing and auto-furnish)
 
 ### Environment Setup
@@ -37,18 +38,32 @@ GEMINI_API_KEY=your_key_here
 ### Install and Run
 
 ```bash
-yarn install
-yarn dev
+git submodule update --init --recursive
+pnpm install
+pnpm dev
 ```
 
 The app runs at [http://localhost:3000](http://localhost:3000).
 
+To open it from another device, run `pnpm dev:network` on the host machine and
+visit the **Network** URL printed by Next.js. This command selects a Tailscale
+IPv4 address when available, or another network IPv4 address otherwise. The
+other device must be able to reach that address, and the host firewall must
+allow incoming connections to port 3000. If the host is reachable only through
+SSH, forward the port instead:
+
+```bash
+ssh -L 3000:localhost:3000 user@host
+```
+
+Then open [http://localhost:3000](http://localhost:3000) on your own machine.
+
 ### Other Commands
 
 ```bash
-yarn build         # production build
-yarn lint          # run oxlint
-yarn lint:fix      # run oxlint with auto-fix
+pnpm build         # production build
+pnpm lint          # run oxlint
+pnpm lint:fix      # run oxlint with auto-fix
 ```
 
 ## Tech Stack
